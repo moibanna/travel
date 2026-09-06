@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. The palette is deliberately restrained: a dense operational
+ * tool is read all day, so colour is reserved for status and alerts rather than
+ * decoration.
+ */
+@theme {
+  --color-canvas: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-line: #e3e6ea;
+  --color-ink: #10151c;
+  --color-ink-soft: #5b6672;
+  --color-brand: #0f5132;
+  --color-brand-soft: #e7f2ec;
+  --color-accent: #1d4ed8;
+
+  --color-ok: #15803d;
+  --color-ok-soft: #e8f5ec;
+  --color-warn: #b45309;
+  --color-warn-soft: #fdf2e2;
+  --color-danger: #b91c1c;
+  --color-danger-soft: #fdeceb;
+  --color-info: #1d4ed8;
+  --color-info-soft: #eaf0fe;
+  --color-muted-soft: #eef1f4;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular figures keep reference numbers and times aligned in dense tables. */
+.numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The daily manifest is printed and handed to drivers. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .print-plain {
+    border: none !important;
+    box-shadow: none !important;
+  }
+  @page {
+    margin: 14mm;
+  }
+}

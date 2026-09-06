@@ -1,0 +1,226 @@
+// Travel Logistics Management System — data model
+//
+// Modelled directly on the operational "Master Sheet" (Flights) workbook:
+//   No. | Name | Arrival | Time | Destination | Departure | Time | Destination |
+//   E-Mail date | Received From | Flight A/D | Reg by | Remarks
+//
+// SQLite is the default so the system runs with zero infrastructure. Switch the
+// datasource provider to "postgresql" for a multi-user production deployment;
+// no model changes are required (enums are intentionally modelled as strings,
+// which SQLite requires and Postgres accepts unchanged).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// Application user. Authentication is credential based; see src/lib/auth.ts.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  /// ADMIN | COORDINATOR | VIEWER — see src/lib/constants.ts
+  role         String   @default("VIEWER")
+  active       Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  auditLogs AuditLog[]
+
+  @@index([role])
+}
+
+/// A traveller. Deduplicated on normalizedName so repeated spreadsheet rows for
+/// the same person collapse into one record with a full movement history.
+model Passenger {
+  id             String  @id @default(cuid())
+  fullName       String
+  /// Upper-cased, punctuation-stripped name used for import deduplication.
+  normalizedName String  @unique
+  company        String?
+  nationality    String?
+  passportNo     String?
+  employeeNo     String?
+  email          String?
+  phone          String?
+  notes          String?
+  active         Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  movements Movement[]
+
+  @@index([fullName])
+}
+
+/// One travel movement — a round trip for one passenger. This is one row of the
+/// legacy spreadsheet, but with the arrival and departure legs properly typed
+/// and the combined "Flight A/D" cell split into its two flight numbers.
+model Movement {
+  id    String @id @default(cuid())
+  /// The operational reference number ("No." column, e.g. 9525).
+  refNo Int    @unique
+
+  passengerId String
+  passenger   Passenger @relation(fields: [passengerId], references: [id], onDelete: Cascade)
+
+  // ---- Arrival leg ----
+  arrivalDate        DateTime?
+  /// Kept as text ("15:50", "TBC") because the source data is not always exact.
+  arrivalTime        String?
+  arrivalFlight      String?
+  /// Where the passenger goes on landing: "EIA to Field", "Ramada", "RC", "TBC".
+  arrivalDestination String?
+
+  // ---- Departure leg ----
+  departureDate        DateTime?
+  departureTime        String?
+  departureFlight      String?
+  departureDestination String?
+
+  // ---- Request provenance ----
+  /// "E-Mail date" — when the request reached the travel desk.
+  requestEmailDate DateTime?
+  /// "Received From" — KT, TRF, Movcon, or the requesting person.
+  receivedFrom     String?
+  /// "Reg by" — the travel desk coordinator who registered the movement.
+  registeredById   String?
+  registeredBy     StaffMember? @relation(fields: [registeredById], references: [id], onDelete: SetNull)
+
+  remarks String?
+  /// PLANNED | CONFIRMED | ARRIVED | DEPARTED | CANCELLED
+  status  String  @default("PLANNED")
+  /// Travel Request Form received. Rows marked "No TRF yet" import as false.
+  trfReceived Boolean @default(false)
+  /// CIP meet-and-greet requested (from the Remarks column).
+  cipRequested Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transportJobs  TransportJob[]
+  accommodations AccommodationBooking[]
+
+  @@index([arrivalDate])
+  @@index([departureDate])
+  @@index([status])
+  @@index([passengerId])
+}
+
+/// An airport transfer tied to one leg of a movement. This is the capability the
+/// spreadsheet never had: transfers can be assigned, tracked and printed as a
+/// driver manifest.
+model TransportJob {
+  id         String   @id @default(cuid())
+  movementId String
+  movement   Movement @relation(fields: [movementId], references: [id], onDelete: Cascade)
+
+  /// ARRIVAL | DEPARTURE
+  leg             String
+  scheduledAt     DateTime?
+  pickupLocation  String?
+  dropoffLocation String?
+  driverName      String?
+  vehicle         String?
+  /// PENDING | ASSIGNED | COMPLETED | CANCELLED
+  status          String    @default("PENDING")
+  notes           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([scheduledAt])
+  @@index([status])
+  @@index([movementId])
+}
+
+/// A hotel stay tied to a movement.
+model AccommodationBooking {
+  id         String   @id @default(cuid())
+  movementId String
+  movement   Movement @relation(fields: [movementId], references: [id], onDelete: Cascade)
+
+  hotelId String?
+  hotel   Hotel?  @relation(fields: [hotelId], references: [id], onDelete: SetNull)
+
+  checkIn        DateTime?
+  checkOut       DateTime?
+  roomType       String?
+  confirmationNo String?
+  /// PENDING | CONFIRMED | CANCELLED
+  status         String    @default("PENDING")
+  notes          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([movementId])
+  @@index([checkIn])
+}
+
+model Hotel {
+  id      String  @id @default(cuid())
+  name    String  @unique
+  city    String?
+  phone   String?
+  notes   String?
+  active  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bookings AccommodationBooking[]
+}
+
+/// A travel desk coordinator — the "Reg by" column (Kamiran, Zana, Idrees, ...).
+model StaffMember {
+  id       String  @id @default(cuid())
+  name     String  @unique
+  initials String?
+  active   Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  movements Movement[]
+}
+
+/// Where requests come from — the "Received From" column (KT, TRF, Movcon, ...).
+model RequestSource {
+  id     String  @id @default(cuid())
+  name   String  @unique
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+}
+
+/// Immutable record of every change. The spreadsheet could not answer "who
+/// changed this flight time and when"; this does.
+model AuditLog {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// Denormalised so the trail survives user deletion.
+  userEmail String?
+  /// CREATE | UPDATE | DELETE | IMPORT | LOGIN
+  action    String
+  /// Movement | Passenger | TransportJob | ...
+  entity    String
+  entityId  String?
+  summary   String
+  /// JSON-encoded field-level diff, or null.
+  changes   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
