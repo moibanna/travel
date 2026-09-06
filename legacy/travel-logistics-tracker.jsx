@@ -100,11 +100,46 @@ function masterSheetRecords() {
 const MASTER_COUNT = MASTER_ROWS.length;
 
 /* ------------------------------------------------------------------ */
+/*  Asking Claude                                                      */
+/*  A published page reaches Claude through the host's sample          */
+/*  capability, never by calling api.anthropic.com itself: a browser   */
+/*  request carries no API key, and putting one in the page would      */
+/*  hand it to every user who opens the page.                          */
+/*  Resolves to null wherever the capability is not granted, so every  */
+/*  caller has to handle its absence.                                  */
+/* ------------------------------------------------------------------ */
+let samplePromise = null;
+function getSample() {
+  if (!samplePromise) {
+    const host = typeof window !== "undefined" ? window.claude : null;
+    samplePromise = host && typeof host.use === "function"
+      ? Promise.resolve(host.use("sample")).catch(() => null)
+      : Promise.resolve(null);
+  }
+  return samplePromise;
+}
+
+/* The host reports failures as a code; say something useful for each. */
+function sampleError(e) {
+  switch (e && e.code) {
+    case "cancelled":    return "";
+    case "not_granted":  return "This page is not allowed to ask Claude. Enter the details by hand.";
+    case "rate_limited": return "Too many requests just now — wait a moment and try again.";
+    default:             return (e && e.message) || "That did not work — please try again.";
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Live flight status                                                 */
-/*  The app cannot call Flightradar24 or eia.krd directly — neither    */
-/*  offers a free public API and browsers block cross-site requests.   */
-/*  Instead it asks Claude to search those sites and report back.      */
-/*  Everything it finds is a SUGGESTION: a person presses Apply.       */
+/*  NOT CONNECTED. Checking a flight means reading Flightradar24 or    */
+/*  eia.krd, and neither this page nor the sample capability can       */
+/*  browse the web. The previous code posted to api.anthropic.com with */
+/*  no key, no anthropic-version header and no browser-access header,  */
+/*  so it could only ever have failed.                                 */
+/*  Answering from the model's own memory instead would mean inventing */
+/*  flight times, which is worse than saying nothing. Connecting this  */
+/*  for real needs a small server-side lookup holding the API key and  */
+/*  running the web search tool — see docs/FLIGHT-LOOKUP.md.           */
 /* ------------------------------------------------------------------ */
 
 /* Split one written flight reference into its separate legs.
@@ -138,38 +173,18 @@ const CHECK_TO_STATUS = {
   Diverted: "Changed", "On schedule": "On schedule", Landed: "On schedule", Departed: "On schedule",
 };
 
-async function lookupFlight({ flightNo, date, kind, airport, today }) {
-  const where = kind === "ARR" ? `arriving at ${airport || "Erbil (EIA)"}` : `departing from ${airport || "Erbil (EIA)"}`;
-  const prompt = `Today is ${today}. Find the status of flight ${flightNo} ${where} on ${date}.
-
-Check Flightradar24 (flightradar24.com) and Erbil International Airport (eia.krd) first, then the operating airline's own flight-status page.
-
-Reply with ONLY a JSON object and nothing else — no explanation, no markdown fences:
-{"found":true,"status":"On schedule","scheduled":"HH:MM","actual":"HH:MM","deltaMinutes":0,"note":"one short sentence","source":"site name"}
-
-Rules:
-- "status" must be exactly one of: On schedule, Delayed, Earlier, Cancelled, Diverted, Landed, Departed, Unknown.
-- Use 24-hour local time at the airport. Leave "scheduled" or "actual" as "" if you cannot find them.
-- "deltaMinutes": positive if later than scheduled, negative if earlier, 0 if unchanged.
-- Live status only exists roughly 3 days ahead. If ${date} is further out, set "found" to false and "status" to "Unknown", and say in "note" that only the published timetable is available so far.
-- If you cannot confirm the flight at all, set "found" to false and "status" to "Unknown". Never guess.`;
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1000,
-      messages: [{ role: "user", content: prompt }],
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-    }),
-  });
-  if (!res.ok) throw new Error(`Lookup failed (${res.status})`);
-  const data = await res.json();
-  const text = (data.content || []).map((b) => (b.type === "text" ? b.text : "")).join("\n");
-  const m = text.replace(/```json|```/g, "").match(/\{[\s\S]*\}/);
-  if (!m) throw new Error("No answer returned");
-  return JSON.parse(m[0]);
+async function lookupFlight() {
+  /* The documented result shape, with found:false — the caller already
+     renders that as "could not confirm" rather than treating it as a status. */
+  return {
+    found: false,
+    status: "Unknown",
+    scheduled: "",
+    actual: "",
+    deltaMinutes: 0,
+    note: "Live flight status is not connected. It needs a server-side lookup that can search the web; until then, check the airline or the airport board and set the time by hand.",
+    source: "",
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -2752,12 +2767,17 @@ function TicketScanModal({ onClose, onResult }) {
   const [error, setError] = useState("");
   const fileRef = useRef(null);
 
-  const MEDIA = { pdf: "application/pdf", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" };
+  const MEDIA = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" };
 
   const pick = (f) => {
     setError("");
     const ext = f.name.split(".").pop().toLowerCase();
-    if (!MEDIA[ext]) { setError("Please choose a PDF or a photo (JPG, PNG, WEBP)."); return; }
+    if (!MEDIA[ext]) {
+      setError(ext === "pdf"
+        ? "PDFs cannot be scanned. Open the ticket and photograph or screenshot it instead."
+        : "Please choose a photo (JPG, PNG, WEBP).");
+      return;
+    }
     setFile(f);
   };
 
@@ -2765,33 +2785,33 @@ function TicketScanModal({ onClose, onResult }) {
     if (!file) return;
     setBusy(true); setError("");
     try {
-      const base64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(String(r.result).split(",")[1]);
-        r.onerror = () => rej(new Error("Could not read the file."));
-        r.readAsDataURL(file);
-      });
-      const ext = file.name.split(".").pop().toLowerCase();
-      const mediaType = MEDIA[ext];
-      const block = mediaType === "application/pdf"
-        ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
-        : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
+      const sample = await getSample();
+      if (!sample) {
+        throw new Error(
+          "Ticket scanning is not available here. Enter the details by hand."
+        );
+      }
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: [block, { type: "text", text: SCAN_PROMPT }] }],
-        }),
-      });
-      const data = await response.json();
-      const text = (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
-      const clean = text.replace(/```json|```/g, "").trim();
-      const start = clean.indexOf("{"); const end = clean.lastIndexOf("}");
-      if (start === -1 || end === -1) throw new Error("Could not read ticket details from this file.");
-      const j = JSON.parse(clean.slice(start, end + 1));
+      /* The host states what it will accept, so a file it cannot read is
+         refused with a reason rather than sent and rejected. */
+      const limits = await sample.limits().catch(() => null);
+      const kinds = limits && limits.images && limits.images.mediaTypes;
+      if (kinds && kinds.length && !kinds.includes(file.type)) {
+        throw new Error(
+          file.type === "application/pdf"
+            ? "PDFs cannot be scanned. Open the ticket and photograph or screenshot it instead."
+            : `That file type cannot be scanned. Use ${kinds.join(", ")}.`
+        );
+      }
+      const maxBytes = limits && limits.images && limits.images.maxInputBytes;
+      if (maxBytes && file.size > maxBytes) {
+        throw new Error(
+          `That file is ${(file.size / 1048576).toFixed(1)} MB, over the ${(maxBytes / 1048576).toFixed(0)} MB limit. Photograph it at a lower resolution.`
+        );
+      }
+
+      /* The image goes as-is — no base64, the host handles the encoding. */
+      const j = await sample.json(SCAN_PROMPT, { images: file });
 
       const fields = {};
       if (j.name) fields.name = j.name;
@@ -2806,7 +2826,7 @@ function TicketScanModal({ onClose, onResult }) {
       if (!Object.keys(fields).length) throw new Error("No ticket details found — try a clearer photo or the PDF.");
       onResult(fields);
     } catch (e) {
-      setError(e.message || "Scanning failed — please try again.");
+      setError(sampleError(e) || "Scanning failed — please try again.");
     } finally {
       setBusy(false);
     }
@@ -2829,7 +2849,7 @@ function TicketScanModal({ onClose, onResult }) {
         >
           {file ? <span>📄 {file.name}</span> : <span>Tap to choose a PDF or photo — or drop it here</span>}
         </div>
-        <input ref={fileRef} type="file" accept=".pdf,image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }}
+        <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }}
           onChange={(e) => e.target.files[0] && pick(e.target.files[0])} />
         {error && <div className="import-bad">{error}</div>}
         <div className="modal-actions">
