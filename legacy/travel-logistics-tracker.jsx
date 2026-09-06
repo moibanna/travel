@@ -119,6 +119,71 @@ function getSample() {
   return samplePromise;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Reading PDF tickets                                                */
+/*  Tickets arrive as PDFs, but the sample capability takes images      */
+/*  only — a PDF is rejected outright. So a PDF is converted here,      */
+/*  in the browser, before anything is sent.                           */
+/*                                                                     */
+/*  Its text layer is tried first: an airline e-ticket is generated     */
+/*  text, and reading that is more accurate than reading a picture of   */
+/*  it — no OCR, every page covered, and far fewer tokens. A rendered   */
+/*  page is the fallback for a ticket that was scanned or photographed  */
+/*  into the PDF and so has no text to read.                           */
+/* ------------------------------------------------------------------ */
+const PDFJS_BASE = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174";
+
+let pdfjsPromise = null;
+/* Loaded on demand rather than up front: most sessions never scan a PDF,
+   and this is a third of a megabyte. */
+function loadPdfJs() {
+  if (pdfjsPromise) return pdfjsPromise;
+  pdfjsPromise = new Promise((resolve, reject) => {
+    if (window.pdfjsLib) return resolve(window.pdfjsLib);
+    const el = document.createElement("script");
+    el.src = `${PDFJS_BASE}/pdf.min.js`;
+    el.onload = () => {
+      if (!window.pdfjsLib) return reject(new Error("The PDF reader did not start."));
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/pdf.worker.min.js`;
+      resolve(window.pdfjsLib);
+    };
+    el.onerror = () => reject(new Error("Could not load the PDF reader."));
+    document.head.appendChild(el);
+  }).catch((e) => { pdfjsPromise = null; throw e; });
+  return pdfjsPromise;
+}
+
+/* Below this many non-space characters the text layer is treated as absent —
+   a scanned ticket often still carries a stray word or two from a stamp. */
+const PDF_TEXT_FLOOR = 200;
+
+/* Returns { text } for a normal e-ticket, or { image } for a scanned one. */
+async function readPdfTicket(file) {
+  const lib = await loadPdfJs();
+  const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+
+  let text = "";
+  for (let i = 1; i <= Math.min(doc.numPages, 4); i++) {
+    const content = await (await doc.getPage(i)).getTextContent();
+    text += content.items.map((it) => it.str).join(" ") + "\n";
+  }
+  if (text.replace(/\s+/g, "").length >= PDF_TEXT_FLOOR) return { text: text.trim() };
+
+  /* No usable text: draw the first page and read it as a picture instead. */
+  const page = await doc.getPage(1);
+  const base = page.getViewport({ scale: 1 });
+  const scale = Math.min(2, 2000 / Math.max(base.width, base.height));
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+
+  const image = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.9));
+  if (!image) throw new Error("Could not turn this PDF into a picture to read.");
+  return { image };
+}
+
 /* The host reports failures as a code; say something useful for each. */
 function sampleError(e) {
   switch (e && e.code) {
@@ -2767,17 +2832,12 @@ function TicketScanModal({ onClose, onResult }) {
   const [error, setError] = useState("");
   const fileRef = useRef(null);
 
-  const MEDIA = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" };
+  const MEDIA = { pdf: "application/pdf", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" };
 
   const pick = (f) => {
     setError("");
     const ext = f.name.split(".").pop().toLowerCase();
-    if (!MEDIA[ext]) {
-      setError(ext === "pdf"
-        ? "PDFs cannot be scanned. Open the ticket and photograph or screenshot it instead."
-        : "Please choose a photo (JPG, PNG, WEBP).");
-      return;
-    }
+    if (!MEDIA[ext]) { setError("Please choose a PDF or a photo (JPG, PNG, WEBP)."); return; }
     setFile(f);
   };
 
@@ -2792,26 +2852,32 @@ function TicketScanModal({ onClose, onResult }) {
         );
       }
 
-      /* The host states what it will accept, so a file it cannot read is
-         refused with a reason rather than sent and rejected. */
-      const limits = await sample.limits().catch(() => null);
-      const kinds = limits && limits.images && limits.images.mediaTypes;
-      if (kinds && kinds.length && !kinds.includes(file.type)) {
-        throw new Error(
-          file.type === "application/pdf"
-            ? "PDFs cannot be scanned. Open the ticket and photograph or screenshot it instead."
-            : `That file type cannot be scanned. Use ${kinds.join(", ")}.`
-        );
-      }
-      const maxBytes = limits && limits.images && limits.images.maxInputBytes;
-      if (maxBytes && file.size > maxBytes) {
-        throw new Error(
-          `That file is ${(file.size / 1048576).toFixed(1)} MB, over the ${(maxBytes / 1048576).toFixed(0)} MB limit. Photograph it at a lower resolution.`
-        );
-      }
+      /* A PDF becomes text (or, failing that, a picture) first. */
+      const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+      const ticket = isPdf ? await readPdfTicket(file) : { image: file };
 
-      /* The image goes as-is — no base64, the host handles the encoding. */
-      const j = await sample.json(SCAN_PROMPT, { images: file });
+      let j;
+      if (ticket.text) {
+        j = await sample.json(
+          `${SCAN_PROMPT}\n\nHere is the text of the ticket:\n\n${ticket.text}`
+        );
+      } else {
+        /* The host states what it will accept, so a file it cannot read is
+           refused with a reason rather than sent and rejected. */
+        const limits = await sample.limits().catch(() => null);
+        const kinds = limits && limits.images && limits.images.mediaTypes;
+        if (kinds && kinds.length && !kinds.includes(ticket.image.type)) {
+          throw new Error(`That file type cannot be read. Use ${kinds.join(", ")} or a PDF.`);
+        }
+        const maxBytes = limits && limits.images && limits.images.maxInputBytes;
+        if (maxBytes && ticket.image.size > maxBytes) {
+          throw new Error(
+            `That file is ${(ticket.image.size / 1048576).toFixed(1)} MB, over the ${(maxBytes / 1048576).toFixed(0)} MB limit. Photograph it at a lower resolution.`
+          );
+        }
+        /* The image goes as-is — no base64, the host handles the encoding. */
+        j = await sample.json(SCAN_PROMPT, { images: ticket.image });
+      }
 
       const fields = {};
       if (j.name) fields.name = j.name;
@@ -2849,7 +2915,7 @@ function TicketScanModal({ onClose, onResult }) {
         >
           {file ? <span>📄 {file.name}</span> : <span>Tap to choose a PDF or photo — or drop it here</span>}
         </div>
-        <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }}
+        <input ref={fileRef} type="file" accept=".pdf,image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }}
           onChange={(e) => e.target.files[0] && pick(e.target.files[0])} />
         {error && <div className="import-bad">{error}</div>}
         <div className="modal-actions">
