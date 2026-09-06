@@ -2993,11 +2993,7 @@ const CSS = `
    above, instead of following the device theme. */
 .tlt { color-scheme: light; }
 
-/* Buttons and fields state their colour rather than inheriting it, so a host
-   reset that makes them inherit cannot reach them. Variants that set their own
-   colour (.mini.danger, .mini.on, .btn.primary) carry two classes and still
-   win over this one. */
-.tlt button, .tlt input, .tlt select, .tlt textarea { color: var(--ink); }
+
 .loading { padding:60px; text-align:center; color:var(--dim); }
 
 /* ---- board ---- */
@@ -3165,7 +3161,7 @@ tbody tr:hover td { background:#F7F9F8; }
 .log-meta { font-size:11.5px; color:var(--dim); }
 .log-time { font-size:11.5px; color:var(--dim); white-space:nowrap; }
 .row-actions { white-space:nowrap; }
-.mini { font:inherit; font-size:12px; padding:4px 9px; border:1px solid var(--line); background:#fff; border-radius:5px; cursor:pointer; margin-left:4px; }
+.mini { font:inherit; font-size:12px; padding:4px 9px; border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:5px; cursor:pointer; margin-left:4px; }
 .mini.danger { color:var(--danger); }
 .empty-row { text-align:center; color:var(--dim); padding:28px; }
 .foot { padding:10px 26px; font-size:12.5px; color:var(--dim); }

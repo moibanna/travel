@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "postinstall": "prisma generate",
-    "preview": "node preview/build.mjs"
+    "preview": "node preview/build.mjs",
+    "probe": "node preview/probe.mjs"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.10.0",
