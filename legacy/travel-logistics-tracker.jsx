@@ -2976,6 +2976,28 @@ const CSS = `
   background:var(--paper); min-height:100vh; padding:0 0 48px;
 }
 .tlt * { box-sizing:border-box; }
+
+/* The app had never set a colour or a background on its own root, so it
+   inherited both from whatever page hosted it. On a host with a dark theme that
+   makes the inherited text near-white, and anything that does not set its own
+   colour disappears against the app's white panels — .mini paints itself white,
+   so Edit / Confirm pick-up / Check went invisible while .mini.danger and
+   .mini.on, which do set a colour, stayed readable.
+
+   The palette here is committed to light, so the root now says so explicitly
+   rather than borrowing from its host. */
+.tlt { color: var(--ink); background: var(--paper); }
+
+/* color-scheme keeps the controls the browser paints for itself — date and time
+   pickers, dropdown menus, scrollbars — in the same light world as the palette
+   above, instead of following the device theme. */
+.tlt { color-scheme: light; }
+
+/* Buttons and fields state their colour rather than inheriting it, so a host
+   reset that makes them inherit cannot reach them. Variants that set their own
+   colour (.mini.danger, .mini.on, .btn.primary) carry two classes and still
+   win over this one. */
+.tlt button, .tlt input, .tlt select, .tlt textarea { color: var(--ink); }
 .loading { padding:60px; text-align:center; color:var(--dim); }
 
 /* ---- board ---- */
