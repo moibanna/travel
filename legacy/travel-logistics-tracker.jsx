@@ -610,25 +610,83 @@ async function upgradeTeam(team) {
 const TEAM_KEY = "tlt:team-v1";
 const ME_KEY = "tlt:me-v1"; // personal: remembers who you are on this account
 
+/* the most recent shared list this browser has seen, used as the merge base
+   when the store cannot be re-read at the moment of saving */
+let lastKnownShared = null;
+
+/* Reading has three outcomes and they must not be confused:
+     { state: "ok", records }   the store answered with records
+     { state: "empty" }         the store answered, and there is nothing yet
+     { state: "failed" }        the store could not be read at all
+   Only "empty" may seed the starting data. Seeding after a failed read would
+   replace the team's real records with the 229 sample rows. */
 async function loadRecords() {
+  let failed = false;
   try {
     const res = await window.storage.get(STORE_KEY, true);
-    if (res && res.value) return JSON.parse(res.value);
-  } catch (e) { /* no shared records yet */ }
+    if (res && res.value) {
+      lastKnownShared = JSON.parse(res.value);
+      return { state: "ok", records: lastKnownShared };
+    }
+  } catch (e) { failed = true; }
   // migrate older personal records into the shared store
   try {
     const old = await window.storage.get(STORE_KEY, false);
     if (old && old.value) {
       const recs = JSON.parse(old.value);
       await window.storage.set(STORE_KEY, JSON.stringify(recs), true);
-      return recs;
+      lastKnownShared = recs;
+      return { state: "ok", records: recs };
     }
   } catch (e) { /* nothing to migrate */ }
-  return null;
+  return failed ? { state: "failed" } : { state: "empty" };
 }
-async function saveRecords(records) {
-  try { await window.storage.set(STORE_KEY, JSON.stringify(records), true); }
-  catch (e) { console.error("save failed", e); }
+
+/* Apply just this browser's change on top of whatever is stored now, instead
+   of overwriting the store with this browser's whole list. Two people editing
+   different passengers moments apart both keep their work; under a whole-list
+   write the second save silently erased the first. */
+function mergeIntoBase(base, change) {
+  const byId = new Map((base || []).map((r) => [r.id, r]));
+  for (const id of change.remove || []) byId.delete(id);
+  const fresh = [];
+  for (const rec of change.upsert || []) {
+    if (byId.has(rec.id)) byId.set(rec.id, rec);
+    else fresh.push(rec);
+  }
+  return [...fresh, ...byId.values()];
+}
+
+/* roughly the per-key ceiling; checked here so an oversized save reports the
+   real reason instead of an opaque failure from the store */
+const STORE_LIMIT = 5 * 1024 * 1024;
+
+/* Throws on failure. The caller has to know: a save that quietly fails looks
+   exactly like one that worked, and the edit stays on screen either way. */
+async function saveRecords(records, change) {
+  let payload = records;
+
+  if (change) {
+    let base = lastKnownShared;
+    try {
+      const res = await window.storage.get(STORE_KEY, true);
+      base = res && res.value ? JSON.parse(res.value) : base;
+    } catch (e) { /* fall back to the last list this browser saw */ }
+    if (base) payload = mergeIntoBase(base, change);
+  }
+
+  const text = JSON.stringify(payload);
+  if (text.length > STORE_LIMIT) {
+    throw new Error(
+      `These records need ${(text.length / 1048576).toFixed(1)} MB but the shared ` +
+      `store holds ${(STORE_LIMIT / 1048576).toFixed(0)} MB. Archive older records ` +
+      `under Pickup rules to bring it back under the limit.`
+    );
+  }
+
+  await window.storage.set(STORE_KEY, text, true);
+  lastKnownShared = payload;
+  return payload;
 }
 async function loadTeam() {
   try {
@@ -785,6 +843,10 @@ export default function TravelLogisticsTracker() {
   const [muted, setMuted] = useState(false);
   const [newCode, setNewCode] = useState(null); // a freshly issued recovery code, shown once
   const announced = useRef(new Set());
+  /* set once the initial load has finished, so the effects below do not write
+     the empty starting values back over what was just read */
+  const hydrated = useRef(false);
+  const [storeError, setStoreError] = useState(null);
   const [page, setPage] = useState(1);
   const today = todayStr();
 
@@ -803,9 +865,24 @@ export default function TravelLogisticsTracker() {
         const member = upgraded.members.find((m) => m.name === remembered.name && m.hash === remembered.hash);
         if (member) setMe({ name: member.name, role: member.role });
       }
-      if (stored) setRecords(stored.map(migrate));
-      else { const seed = masterSheetRecords(); setRecords(seed); saveRecords(seed); }
+      if (stored.state === "ok") {
+        setRecords(stored.records.map(migrate));
+      } else if (stored.state === "empty") {
+        /* genuinely nothing saved yet, so it is safe to lay down the starting data */
+        const seed = masterSheetRecords();
+        setRecords(seed);
+        saveRecords(seed).catch((e) => setStoreError(e.message || String(e)));
+      } else {
+        /* the store could not be read. Seeding here would overwrite the team's
+           real records with the sample data, so say so and change nothing. */
+        setRecords([]);
+        setStoreError(
+          "Could not read the shared records. Nothing has been changed — check " +
+          "your connection and reload the page."
+        );
+      }
       setLog(lg); setTrash(tr);
+      hydrated.current = true;
     })();
   }, []);
 
@@ -818,17 +895,33 @@ export default function TravelLogisticsTracker() {
       name: rec ? rec.name : undefined,
       details: details || "",
     };
-    setLog((prev) => {
-      const next = [entry, ...prev].slice(0, 500);
-      saveShared(LOG_KEY, next);
-      return next;
-    });
+    /* saved by the effect below: React may replay an updater, and doing the
+       write in here made that a duplicate save */
+    setLog((prev) => [entry, ...prev].slice(0, 500));
   };
 
   const canEdit = me && me.role !== "Viewer";
   const isSuper = me && me.role === "Super admin";
 
-  const persist = (next) => { setRecords(next); saveRecords(next); };
+  /* `change` describes what this browser altered, so the save can be merged
+     into whatever colleagues have stored since. Omit it only for a deliberate
+     wholesale replacement. */
+  const persist = (next, change) => {
+    setRecords(next);
+    setStoreError(null);
+    saveRecords(next, change)
+      .then((stored) => {
+        /* adopt the merged result, so a colleague's edit appears immediately
+           rather than at the next reload */
+        if (change && stored) setRecords(stored);
+      })
+      .catch((e) => setStoreError(e.message || "The change could not be saved."));
+  };
+
+  /* the activity log and recycle bin are saved here rather than inside a state
+     updater, so each change is written exactly once */
+  useEffect(() => { if (hydrated.current) saveShared(LOG_KEY, log); }, [log]);
+  useEffect(() => { if (hydrated.current) saveShared(TRASH_KEY, trash); }, [trash]);
 
   const nextNo = useMemo(() => {
     if (!records || !records.length) return 1;
@@ -887,7 +980,9 @@ export default function TravelLogisticsTracker() {
 
   useEffect(() => {
     alerts.forEach((a) => {
-      const key = a.record.id + a.kind;
+      /* the day is part of the key: a flight moved to another date has to be
+         announced again rather than being suppressed by the earlier one */
+      const key = a.record.id + a.kind + today;
       if (announced.current.has(key)) return;
       announced.current.add(key);
       const what = a.kind === "ARR"
@@ -896,21 +991,22 @@ export default function TravelLogisticsTracker() {
       notify(what);
       if (!muted) beep();
     });
-  }, [alerts, muted]);
+  }, [alerts, muted, today]);
 
   /* the pick-up time only becomes dependable once the passenger has agreed to it */
   const toggleConfirm = (rec) => {
     const now = rec.depPickupConfirmed ? null : { at: Date.now(), by: me.name };
     const p = pickupFor(rec, rules);
-    persist(records.map((r) => (r.id === rec.id ? { ...r, depPickupConfirmed: now } : r)));
+    const updated = { ...rec, depPickupConfirmed: now };
+    persist(records.map((r) => (r.id === rec.id ? updated : r)), { upsert: [updated] });
     addLog(now ? "pick-up confirmed" : "pick-up unconfirmed", rec,
       `${p ? p.time : "—"}${p && p.dayOffset ? " the night before" : ""}${rec.depDest ? ` from ${originOf(rec.depDest)}` : ""}`);
   };
 
   const markReminded = (a) => {
     const field = a.kind === "ARR" ? "arrReminded" : "depReminded";
-    persist(records.map((r) => (r.id === a.record.id
-      ? { ...r, [field]: { at: Date.now(), by: me.name } } : r)));
+    const updated = { ...a.record, [field]: { at: Date.now(), by: me.name } };
+    persist(records.map((r) => (r.id === a.record.id ? updated : r)), { upsert: [updated] });
     addLog("driver reminded", a.record,
       `${a.kind === "ARR" ? "airport pick-up" : "collection"} at ${a.at}${a.driver ? ` — ${a.driver}` : " — no driver assigned"}`);
   };
@@ -962,43 +1058,37 @@ export default function TravelLogisticsTracker() {
       rec.depPickupConfirmed = { ...rec.depPickupConfirmed, by: me.name };
     }
     if (rec.id) {
-      persist(records.map((r) => (r.id === rec.id ? rec : r)));
+      persist(records.map((r) => (r.id === rec.id ? rec : r)), { upsert: [rec] });
       if (_revision) addLog("ticket revised", rec, `new ticket scanned — ${_revision}`);
       else addLog("edited", rec);
     } else {
       const fresh = { ...rec, id: String(Date.now()), no: nextNo };
-      persist([fresh, ...records]);
+      persist([fresh, ...records], { upsert: [fresh] });
       addLog("added", fresh, _revision ? "from a scanned ticket" : "");
     }
     setEditing(null);
   };
 
   const deleteRecord = (rec) => {
-    persist(records.filter((r) => r.id !== rec.id));
-    setTrash((prev) => {
-      const next = [{ ...rec, deletedBy: me.name, deletedAt: Date.now() }, ...prev].slice(0, 100);
-      saveShared(TRASH_KEY, next);
-      return next;
-    });
+    persist(records.filter((r) => r.id !== rec.id), { remove: [rec.id] });
+    setTrash((prev) => [{ ...rec, deletedBy: me.name, deletedAt: Date.now() }, ...prev].slice(0, 100));
     addLog("deleted", rec, "moved to recycle bin");
     setConfirmDel(null);
   };
 
   const restoreRecord = (rec) => {
-    setTrash((prev) => {
-      const next = prev.filter((t) => t.id !== rec.id);
-      saveShared(TRASH_KEY, next);
-      return next;
-    });
+    setTrash((prev) => prev.filter((t) => t.id !== rec.id));
     const { deletedBy, deletedAt, ...clean } = rec;
-    persist([migrate(clean), ...records]);
+    const restored = migrate(clean);
+    persist([restored, ...records], { upsert: [restored] });
     addLog("restored", rec, `originally deleted by ${rec.deletedBy}`);
   };
 
   const toggleDone = (id, field) => {
     const rec = records.find((r) => r.id === id);
     const nowDone = rec && !rec[field];
-    persist(records.map((r) => (r.id === id ? { ...r, [field]: !r[field] } : r)));
+    const next = records.map((r) => (r.id === id ? { ...r, [field]: !r[field] } : r));
+    persist(next, rec ? { upsert: [next.find((r) => r.id === id)] } : undefined);
     if (rec) addLog(
       field === "arrDone"
         ? (nowDone ? "marked arrived" : "unmarked arrived")
@@ -1022,7 +1112,8 @@ export default function TravelLogisticsTracker() {
       },
     };
     if (data.actual && /^\d{2}:\d{2}$/.test(data.actual)) patch[timeField] = data.actual;
-    persist(records.map((r) => (r.id === record.id ? { ...r, ...patch } : r)));
+    const updated = { ...record, ...patch };
+    persist(records.map((r) => (r.id === record.id ? updated : r)), { upsert: [updated] });
     addLog("flight check applied", record,
       `${flightNo} ${kind} — ${data.status} per the airline${data.actual ? `, time set to ${data.actual}` : ""}${data.source ? ` (${data.source})` : ""}`);
   };
@@ -1055,7 +1146,7 @@ export default function TravelLogisticsTracker() {
     a.click();
     URL.revokeObjectURL(a.href);
 
-    persist(records.filter((r) => !isOld(r, line)));
+    persist(records.filter((r) => !isOld(r, line)), { remove: old.map((r) => r.id) });
     addLog("archived", null, `${old.length} records with no movement since ${fmtDate(line)} exported and removed`);
     setRulesOpen(false);
   };
@@ -1096,7 +1187,12 @@ export default function TravelLogisticsTracker() {
     });
 
     const removed = replace ? records.length : 0;
-    persist(replace ? withIds : [...withIds, ...records]);
+    /* "replace everything" is a deliberate wholesale write, and the one case
+       that must not merge with what is already stored */
+    persist(
+      replace ? withIds : [...withIds, ...records],
+      replace ? undefined : { upsert: withIds },
+    );
     return { added: withIds.length, skipped, removed };
   };
 
@@ -1174,6 +1270,16 @@ export default function TravelLogisticsTracker() {
   return (
     <div className="tlt">
       <style>{CSS}</style>
+
+      {/* A failed read or write must be impossible to miss: the edit stays on
+          screen either way, so without this a lost change looks like a saved one. */}
+      {storeError && (
+        <div className="store-error" role="alert">
+          <strong>Not saved.</strong> {storeError}
+          <button className="btn ghost sm" onClick={() => window.location.reload()}>Reload</button>
+          <button className="btn ghost sm" onClick={() => setStoreError(null)}>Dismiss</button>
+        </div>
+      )}
 
       {newCode && (
         <div className="overlay">
@@ -2851,6 +2957,14 @@ function ImportModal({ onImport, onImportBuiltIn, onClose, isSuper, existingCoun
 
 /* ================= styles ================= */
 const CSS = `
+.store-error{position:sticky;top:0;z-index:60;display:flex;align-items:center;gap:10px;
+  flex-wrap:wrap;padding:10px 14px;background:#b3261e;color:#fff;font-size:14px;
+  box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.store-error strong{font-weight:600}
+.store-error .btn{margin-left:auto;border-color:rgba(255,255,255,.55);color:#fff}
+.store-error .btn+.btn{margin-left:0}
+.btn.sm{padding:4px 10px;font-size:13px}
+
 @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&display=swap');
 
 .tlt {

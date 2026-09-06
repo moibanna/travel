@@ -144,3 +144,29 @@ export class StorageFullError extends Error {
 export function estimateBytes(records: MovementRecord[]): number {
   return JSON.stringify(records).length;
 }
+
+/**
+ * Applies one browser's change on top of whatever is stored now.
+ *
+ * This is the same algorithm as `mergeIntoBase` in the standalone tracker, kept
+ * here so it can be tested. The two copies must stay in step: the tracker ships
+ * as a single file and cannot import from this module.
+ *
+ * Records the caller did not touch are taken from `base`, so a colleague's edit
+ * to a different passenger survives. Records the caller did touch win, because
+ * the caller has just been looking at them.
+ */
+export function mergeIntoBase(
+  base: MovementRecord[] | null,
+  change: { upsert?: MovementRecord[]; remove?: string[] },
+): MovementRecord[] {
+  const byId = new Map((base ?? []).map((r) => [r.id, r]));
+  for (const id of change.remove ?? []) byId.delete(id);
+
+  const fresh: MovementRecord[] = [];
+  for (const rec of change.upsert ?? []) {
+    if (byId.has(rec.id)) byId.set(rec.id, rec);
+    else fresh.push(rec);
+  }
+  return [...fresh, ...byId.values()];
+}
