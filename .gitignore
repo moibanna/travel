@@ -44,3 +44,7 @@ next-env.d.ts
 /src/generated
 /prisma/*.db
 /prisma/*.db-journal
+
+# Preview build output — regenerate with `npm run preview`
+/preview/bundle.js
+/preview/index.html

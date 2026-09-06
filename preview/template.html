@@ -1,0 +1,107 @@
+<title>Travel Logistics Tracker</title>
+<style>
+  /* Palette is taken from the tracker's own tokens rather than invented, so the
+     frame belongs to the product: --board for the strip, --paper for the ground. */
+  :root{
+    --board:#141C26; --board-text:#E9EEF3; --board-line:#26313E;
+    --paper:#F1F3F2; --hl:#F5B942; --dim:#8C99A6;
+  }
+  /* The tracker commits to one light visual world, so the frame does too —
+     painted explicitly, so it holds on either host ground. */
+  html{color-scheme:light}
+  body{margin:0;background:var(--paper)}
+
+  .sandbox{
+    position:sticky; top:0; z-index:200;
+    display:flex; align-items:center; gap:10px 14px; flex-wrap:wrap;
+    padding:9px 16px;
+    background:var(--board); color:var(--board-text);
+    border-bottom:1px solid var(--board-line);
+    font:13px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  }
+  .sandbox b{font-weight:600}
+  .chip{
+    flex:none;
+    padding:2px 8px; border-radius:3px;
+    background:var(--hl); color:#241A00;
+    font-size:11px; font-weight:700;
+    letter-spacing:.06em; text-transform:uppercase;
+  }
+  .sandbox p{margin:0}
+  .sandbox .muted{color:var(--dim)}
+  .sandbox a{color:var(--hl)}
+  .reset{
+    margin-left:auto; flex:none;
+    background:transparent; color:var(--board-text);
+    border:1px solid var(--board-line); border-radius:4px;
+    padding:4px 10px; font:inherit; font-size:12px; cursor:pointer;
+  }
+  .reset:hover{border-color:var(--dim)}
+  .reset:focus-visible{outline:2px solid var(--hl); outline-offset:2px}
+  .boot{padding:48px 16px; text-align:center; color:#5D6B78;
+    font:14px ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+</style>
+
+<div class="sandbox">
+  <span class="chip">Preview</span>
+  <p>
+    <b>Records are saved in this browser only.</b>
+    <span class="muted">Separate from your live tracker — nothing you do here reaches the team.</span>
+  </p>
+  <p class="muted">First run asks you to set an admin PIN (4–6 digits, not 1234).</p>
+  <button class="reset" type="button" id="reset">Start over</button>
+</div>
+
+<div id="root"><div class="boot">Loading the tracker…</div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script>
+/* The tracker talks to window.storage. On its normal host that is shared team
+   storage; here it is backed by localStorage so the preview is self-contained
+   and cannot touch anything real. The shared/personal flag is kept as a key
+   prefix so both paths behave as the app expects. */
+(function () {
+  var key = function (k, shared) { return (shared ? "shared:" : "mine:") + k; };
+  window.storage = {
+    get: function (k, shared) {
+      var v = localStorage.getItem(key(k, shared));
+      return Promise.resolve(v === null ? null : { value: v });
+    },
+    set: function (k, v, shared) {
+      try { localStorage.setItem(key(k, shared), v); return Promise.resolve(); }
+      catch (e) { return Promise.reject(new Error(
+        "This browser's storage is full. In the real app this is the 5 MB shared-store " +
+        "limit; archive older records to bring it back under."
+      )); }
+    },
+    delete: function (k, shared) {
+      localStorage.removeItem(key(k, shared));
+      return Promise.resolve();
+    }
+  };
+
+  document.getElementById("reset").addEventListener("click", function () {
+    if (!confirm("Clear this preview and start from the 229 sample records again?")) return;
+    Object.keys(localStorage)
+      .filter(function (k) { return k.indexOf("shared:") === 0 || k.indexOf("mine:") === 0; })
+      .forEach(function (k) { localStorage.removeItem(k); });
+    location.reload();
+  });
+})();
+</script>
+<script>
+__BUNDLE__
+</script>
+<script>
+(function () {
+  var root = document.getElementById("root");
+  try {
+    ReactDOM.createRoot(root).render(React.createElement(TLT.default));
+  } catch (e) {
+    root.innerHTML = '<div class="boot">The tracker could not start: ' +
+      String(e && e.message ? e.message : e) + '</div>';
+  }
+})();
+</script>
