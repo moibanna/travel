@@ -177,45 +177,62 @@ $MovementColumns = @(
     @{ InternalName = "RefNo"; DisplayName = "No."; Type = "Number"; Required = $true; Indexed = $true
        Description = "The operational reference number carried over from the Master Sheet." }
 
-    @{ InternalName = "Company"; DisplayName = "Company"; Type = "Text" }
+    @{ InternalName = "EmployeeType"; DisplayName = "Employee type"; Type = "Choice"
+       Choices = @("Direct employee", "Contractor") }
 
     # ---- Arrival leg ----
-    @{ InternalName = "ArrivalDate"; DisplayName = "Arrival"; Type = "DateTime"; DateOnly = $true; Indexed = $true }
-    @{ InternalName = "ArrivalTime"; DisplayName = "Arrival time"; Type = "Text"
-       Description = "24-hour, HH:MM. Leave blank when the time is not yet confirmed." }
-    @{ InternalName = "ArrivalFlight"; DisplayName = "Arrival flight"; Type = "Text" }
-    @{ InternalName = "ArrivalRoute"; DisplayName = "Arrival route"; Type = "Text"
-       Description = "Where the passenger goes on landing, e.g. 'EIA to Ramada'." }
+    @{ InternalName = "ArrDate"; DisplayName = "Arrival"; Type = "DateTime"; DateOnly = $true; Indexed = $true }
+    @{ InternalName = "ArrTime"; DisplayName = "Arrival time"; Type = "Text"
+       Description = "24-hour HH:MM. Text, so an unconfirmed time can stay blank rather than be invented." }
+    @{ InternalName = "ArrAirport"; DisplayName = "Arrival airport"; Type = "Choice"
+       Choices = @("Erbil (EIA)", "Mardin", "Shirnak"); DefaultValue = "Erbil (EIA)" }
+    @{ InternalName = "ArrDest"; DisplayName = "Arrival route"; Type = "Text"
+       Description = "Where the passenger goes on landing, e.g. 'EIA to Ramada Hotel'." }
+    @{ InternalName = "ArrFlight"; DisplayName = "Arrival flight"; Type = "Text" }
+    @{ InternalName = "ArrStatus"; DisplayName = "Arrival flight status"; Type = "Choice"
+       Choices = @("On schedule", "Delayed", "Earlier", "Revised", "Changed", "Missed connection", "Cancelled")
+       DefaultValue = "On schedule" }
+    @{ InternalName = "ArrChangeBy"; DisplayName = "Arrival changed by"; Type = "Choice"
+       Choices = @("Airline", "Travel agent", "Us", "Traveller")
+       Description = "Who caused the change. A flight the airline cancelled reads differently from one the office cancelled." }
+    @{ InternalName = "ArrDriver"; DisplayName = "Arrival driver"; Type = "Text" }
+    @{ InternalName = "ArrDriverType"; DisplayName = "Arrival driver type"; Type = "Choice"
+       Choices = @("Team driver", "Normal driver") }
+    @{ InternalName = "ArrDone"; DisplayName = "Arrived"; Type = "Boolean"; DefaultValue = "0"
+       Description = "Ticked once the passenger has actually been collected." }
 
     # ---- Departure leg ----
-    @{ InternalName = "DepartureDate"; DisplayName = "Departure"; Type = "DateTime"; DateOnly = $true; Indexed = $true }
-    @{ InternalName = "DepartureTime"; DisplayName = "Departure time"; Type = "Text" }
-    @{ InternalName = "DepartureFlight"; DisplayName = "Departure flight"; Type = "Text" }
-    @{ InternalName = "DepartureRoute"; DisplayName = "Departure route"; Type = "Text" }
-
-    @{ InternalName = "Airport"; DisplayName = "Airport"; Type = "Choice"
-       Choices = @("EIA", "Mardin", "Shirnak", "Sulaymaniyah", "Baghdad", "Other") }
+    @{ InternalName = "DepDate"; DisplayName = "Departure"; Type = "DateTime"; DateOnly = $true; Indexed = $true }
+    @{ InternalName = "DepTime"; DisplayName = "Departure time"; Type = "Text" }
+    @{ InternalName = "DepPickup"; DisplayName = "Pickup time"; Type = "Text"
+       Description = "Leave blank to use the time the pickup rules calculate. Fill it in only to override them." }
+    @{ InternalName = "DepPickupConfirmed"; DisplayName = "Pickup agreed"; Type = "Note"
+       Description = "JSON { at, by } recording when the pickup time was agreed with the passenger, and by whom." }
+    @{ InternalName = "DepAirport"; DisplayName = "Departure airport"; Type = "Choice"
+       Choices = @("Erbil (EIA)", "Mardin", "Shirnak"); DefaultValue = "Erbil (EIA)" }
+    @{ InternalName = "DepDest"; DisplayName = "Departure route"; Type = "Text"
+       Description = "Where the passenger is collected from, e.g. 'Ramada Hotel to EIA'." }
+    @{ InternalName = "DepFlight"; DisplayName = "Departure flight"; Type = "Text" }
+    @{ InternalName = "DepStatus"; DisplayName = "Departure flight status"; Type = "Choice"
+       Choices = @("On schedule", "Delayed", "Earlier", "Revised", "Changed", "Missed connection", "Cancelled")
+       DefaultValue = "On schedule" }
+    @{ InternalName = "DepChangeBy"; DisplayName = "Departure changed by"; Type = "Choice"
+       Choices = @("Airline", "Travel agent", "Us", "Traveller") }
+    @{ InternalName = "DepDriver"; DisplayName = "Departure driver"; Type = "Text" }
+    @{ InternalName = "DepDriverType"; DisplayName = "Departure driver type"; Type = "Choice"
+       Choices = @("Team driver", "Normal driver") }
+    @{ InternalName = "DepDone"; DisplayName = "Departed"; Type = "Boolean"; DefaultValue = "0" }
 
     # ---- Request provenance ----
-    @{ InternalName = "RequestDate"; DisplayName = "Request received"; Type = "DateTime"; DateOnly = $true
+    @{ InternalName = "EmailDate"; DisplayName = "Request received"; Type = "DateTime"; DateOnly = $true
        Description = "The 'E-Mail date' column: when the request reached the travel desk." }
-    @{ InternalName = "ReceivedFrom"; DisplayName = "Received from"; Type = "Text"
-       Description = "KT, TRF, Movcon, or the name of the requester." }
-    @{ InternalName = "RegisteredBy"; DisplayName = "Registered by"; Type = "Choice"; Indexed = $true
-       Choices = @("Kamiran", "Mohammed", "Muhammed", "Zana", "Idrees", "Farhang", "Omid") }
-
-    # ---- Service and status ----
-    @{ InternalName = "ServiceType"; DisplayName = "Service"; Type = "MultiChoice"
-       Choices = @("FT", "CIP", "NJ")
-       Description = "Pulled out of the Remarks column so it can be filtered and counted." }
-    @{ InternalName = "FlightStatus"; DisplayName = "Flight status"; Type = "Choice"
-       Choices = @("Confirmed", "Revised", "Cancelled"); DefaultValue = "Confirmed" }
-    @{ InternalName = "MovementStatus"; DisplayName = "Status"; Type = "Choice"; Indexed = $true
-       Choices = @("Planned", "Confirmed", "In country", "Departed", "Cancelled"); DefaultValue = "Planned" }
-    @{ InternalName = "TrfReceived"; DisplayName = "TRF received"; Type = "Boolean"; DefaultValue = "1"
-       Description = "Rows that said 'No TRF yet' come across unticked." }
-    @{ InternalName = "Completed"; DisplayName = "Completed"; Type = "Boolean"; DefaultValue = "0"
-       Description = "Ticked when the movement needs no further action." }
+    @{ InternalName = "ReceivedFrom"; DisplayName = "Received from"; Type = "Choice"
+       Choices = @("KT", "TRF") }
+    @{ InternalName = "RegBy"; DisplayName = "Registered by"; Type = "Choice"; Indexed = $true
+       Choices = @("Mohammed", "Idrees", "Zana", "Omid", "Farhang", "Kamiran") }
+    @{ InternalName = "Service"; DisplayName = "Service"; Type = "Choice"
+       Choices = @("FT", "Meet & Greet", "CIP")
+       Description = "FT is First Terminal. Affects the calculated pickup time." }
 
     @{ InternalName = "Remarks"; DisplayName = "Remarks"; Type = "Note" }
 
@@ -306,24 +323,25 @@ Write-Step "Views"
 $views = @(
     @{
         Title  = "Arrivals today"
-        Fields = @("RefNo","Title","ArrivalTime","ArrivalFlight","ArrivalRoute","Airport","RegisteredBy","ServiceType","Remarks")
-        Query  = "<Where><Eq><FieldRef Name='ArrivalDate'/><Value Type='DateTime'><Today/></Value></Eq></Where><OrderBy><FieldRef Name='ArrivalTime'/></OrderBy>"
+        Fields = @("RefNo","Title","ArrTime","ArrFlight","ArrStatus","ArrDest","ArrAirport","ArrDriver","Service","RegBy","Remarks")
+        Query  = "<Where><Eq><FieldRef Name='ArrDate'/><Value Type='DateTime'><Today/></Value></Eq></Where><OrderBy><FieldRef Name='ArrTime'/></OrderBy>"
     },
     @{
         Title  = "Departures today"
-        Fields = @("RefNo","Title","DepartureTime","DepartureFlight","DepartureRoute","Airport","RegisteredBy","ServiceType","Remarks")
-        Query  = "<Where><Eq><FieldRef Name='DepartureDate'/><Value Type='DateTime'><Today/></Value></Eq></Where><OrderBy><FieldRef Name='DepartureTime'/></OrderBy>"
+        Fields = @("RefNo","Title","DepPickup","DepTime","DepFlight","DepStatus","DepDest","DepAirport","DepDriver","Service","RegBy","Remarks")
+        Query  = "<Where><Eq><FieldRef Name='DepDate'/><Value Type='DateTime'><Today/></Value></Eq></Where><OrderBy><FieldRef Name='DepTime'/></OrderBy>"
     },
     @{
         # Persons on board: arrived, and not yet departed.
         Title  = "In country"
-        Fields = @("RefNo","Title","Company","ArrivalDate","ArrivalRoute","DepartureDate","RegisteredBy")
-        Query  = "<Where><And><Leq><FieldRef Name='ArrivalDate'/><Value Type='DateTime'><Today/></Value></Leq><Or><IsNull><FieldRef Name='DepartureDate'/></IsNull><Geq><FieldRef Name='DepartureDate'/><Value Type='DateTime'><Today/></Value></Geq></Or></And></Where><OrderBy><FieldRef Name='ArrivalDate'/></OrderBy>"
+        Fields = @("RefNo","Title","EmployeeType","ArrDate","ArrDest","DepDate","RegBy")
+        Query  = "<Where><And><Leq><FieldRef Name='ArrDate'/><Value Type='DateTime'><Today/></Value></Leq><Or><IsNull><FieldRef Name='DepDate'/></IsNull><Geq><FieldRef Name='DepDate'/><Value Type='DateTime'><Today/></Value></Geq></Or></And></Where><OrderBy><FieldRef Name='ArrDate'/></OrderBy>"
     },
     @{
-        Title  = "Missing TRF"
-        Fields = @("RefNo","Title","ArrivalDate","ArrivalRoute","ReceivedFrom","RegisteredBy","Remarks")
-        Query  = "<Where><And><Eq><FieldRef Name='TrfReceived'/><Value Type='Boolean'>0</Value></Eq><Geq><FieldRef Name='ArrivalDate'/><Value Type='DateTime'><Today/></Value></Geq></And></Where><OrderBy><FieldRef Name='ArrivalDate'/></OrderBy>"
+        # Open items: a future movement that still has no flight number against it.
+        Title  = "Awaiting flight details"
+        Fields = @("RefNo","Title","ArrDate","DepDate","ReceivedFrom","RegBy","Remarks")
+        Query  = "<Where><And><Geq><FieldRef Name='ArrDate'/><Value Type='DateTime'><Today/></Value></Geq><IsNull><FieldRef Name='ArrFlight'/></IsNull></And></Where><OrderBy><FieldRef Name='ArrDate'/></OrderBy>"
     }
 )
 
